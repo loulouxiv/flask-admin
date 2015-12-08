@@ -66,7 +66,8 @@ class QueryAjaxModelLoader(AjaxModelLoader):
         if self.order_by:
             query = query.order_by(self.order_by)
 
-        return query.offset(offset).limit(limit).all()
+        results = query.offset(offset).limit(limit).all()
+        return [ term ] + results
 
 
 def create_ajax_loader(model, session, name, field_name, options):
