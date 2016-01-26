@@ -2,6 +2,7 @@ from sqlalchemy import or_
 
 from flask_admin._compat import as_unicode, string_types
 from flask_admin.model.ajax import AjaxModelLoader, DEFAULT_PAGE_SIZE
+from flask import session as flask_session
 
 from .tools import get_primary_key, has_multiple_pks
 
@@ -20,6 +21,7 @@ class QueryAjaxModelLoader(AjaxModelLoader):
         self.model = model
         self.fields = options.get('fields')
         self.order_by = options.get('order_by')
+        self.create_field = options.get('create_field')
 
         if not self.fields:
             raise ValueError('AJAX loading requires `fields` to be specified for %s.%s' % (model, self.name))
@@ -51,11 +53,20 @@ class QueryAjaxModelLoader(AjaxModelLoader):
     def format(self, model):
         if not model:
             return None
-
-        return (getattr(model, self.pk), as_unicode(model))
+        if as_unicode(model) != '' and getattr(model, self.pk) is None:
+            return ('new', as_unicode(model))
+        else:
+            return (getattr(model, self.pk), as_unicode(model))
 
     def get_one(self, pk):
-        return self.session.query(self.model).get(pk)
+        if pk == 'new':
+            print ("Clef : ", pk)
+            add_choice = self.model()
+            setattr(add_choice, self.create_field, flask_session['search_term' + self.model.__name__]);
+            self.session.add(add_choice)
+            return add_choice
+        else:
+            return self.session.query(self.model).get(pk)
 
     def get_list(self, term, offset=0, limit=DEFAULT_PAGE_SIZE):
         query = self.session.query(self.model)
@@ -67,7 +78,14 @@ class QueryAjaxModelLoader(AjaxModelLoader):
             query = query.order_by(self.order_by)
 
         results = query.offset(offset).limit(limit).all()
-        return [ term ] + results
+        if (self.create_field and not term in (getattr(result, self.create_field) for result in results)):
+            add_choice = self.model();
+            setattr(add_choice, self.create_field, term);
+            flask_session['search_term' + self.model.__name__] = term
+            setattr(add_choice, self.pk, 'new');
+            return [ add_choice ] + results
+        else:
+            return results
 
 
 def create_ajax_loader(model, session, name, field_name, options):
