@@ -23,10 +23,9 @@ from flask_admin.helpers import (get_form_data, validate_form_on_submit,
 from flask_admin.tools import rec_getattr
 from flask_admin._backwards import ObsoleteAttr
 from flask_admin._compat import (iteritems, itervalues, OrderedDict,
-                                 as_unicode, csv_encode)
+                                 as_unicode, csv_encode, text_type)
 from .helpers import prettify_name, get_mdict_item_or_list
 from .ajax import AjaxModelLoader
-from .fields import ListEditableFieldList
 
 # Used to generate filter query string name
 filter_char_re = re.compile('[^a-z0-9 ]')
@@ -78,6 +77,10 @@ class FilterGroup(object):
         for item in self.filters:
             copy = dict(item)
             copy['operation'] = as_unicode(copy['operation'])
+            options = copy['options']
+            if options:
+                copy['options'] = [(k, text_type(v)) for k, v in options]
+
             filters.append(copy)
         return as_unicode(self.label), filters
 
@@ -428,6 +431,20 @@ class BaseModelView(BaseView, ActionsMixin):
         Controls if the primary key should be displayed in the list view.
     """
 
+    column_display_actions = True
+    """
+        Controls the display of the row actions (edit, delete, details, etc.)
+        column in the list view.
+
+        Useful for preventing a blank column from displaying if your view does
+        not use any build-in or custom row actions.
+
+        This column is not hidden automatically due to backwards compatibility.
+
+        Note: This only affects display and does not control whether the row
+        actions endpoints are accessible.
+    """
+
     simple_list_pager = False
     """
         Enable or disable simple list pager.
@@ -735,7 +752,6 @@ class BaseModelView(BaseView, ActionsMixin):
                 key = as_unicode(flt.name)
                 if key not in self._filter_groups:
                     self._filter_groups[key] = FilterGroup(flt.name)
-
                 self._filter_groups[key].append({
                     'index': i,
                     'arg': self.get_filter_arg(i, flt),
@@ -1052,17 +1068,16 @@ class BaseModelView(BaseView, ActionsMixin):
         """
         raise NotImplementedError('Please implement scaffold_form method')
 
-    def scaffold_list_form(self, custom_fieldlist=ListEditableFieldList,
-                           validators=None):
+    def scaffold_list_form(self, widget=None, validators=None):
         """
             Create form for the `index_view` using only the columns from
             `self.column_editable_list`.
 
+            :param widget:
+                WTForms widget class. Defaults to `XEditableWidget`.
             :param validators:
                 `form_args` dict with only validators
                 {'name': {'validators': [DataRequired()]}}
-            :param custom_fieldlist:
-                A WTForm FieldList class. By default, `ListEditableFieldList`.
 
             Must be implemented in the child class.
         """
@@ -1090,7 +1105,6 @@ class BaseModelView(BaseView, ActionsMixin):
 
             Allows overriding the editable list view field/widget. For example::
 
-                from flask_admin.model.fields import ListEditableFieldList
                 from flask_admin.model.widgets import XEditableWidget
 
                 class CustomWidget(XEditableWidget):
@@ -1102,12 +1116,9 @@ class BaseModelView(BaseView, ActionsMixin):
 
                         return kwargs
 
-                class CustomFieldList(ListEditableFieldList):
-                    widget = CustomWidget()
-
                 class MyModelView(BaseModelView):
                     def get_list_form(self):
-                        return self.scaffold_list_form(CustomFieldList)
+                        return self.scaffold_list_form(widget=CustomWidget)
         """
         if self.form_args:
             # get only validators, other form_args can break FieldList wrapper
@@ -1531,7 +1542,7 @@ class BaseModelView(BaseView, ActionsMixin):
                     value = request.args[n]
 
                     if flt.validate(value):
-                        filters.append((pos, (idx, flt.name, value)))
+                        filters.append((pos, (idx, as_unicode(flt.name), value)))
                     else:
                         flash(gettext('Invalid Filter Value: %(value)s', value=value))
 
@@ -1667,6 +1678,14 @@ class BaseModelView(BaseView, ActionsMixin):
             self.column_type_formatters_export,
         )
 
+    def get_export_name(self):
+        """
+        :return: The exported csv file name.
+        """
+        filename = '%s_%s.csv' % (self.name,
+                                  time.strftime("%Y-%m-%d_%H-%M-%S"))
+        return filename
+
     # AJAX references
     def _process_ajax_references(self):
         """
@@ -1698,11 +1717,6 @@ class BaseModelView(BaseView, ActionsMixin):
         """
             List view
         """
-        if self.column_editable_list:
-            form = self.list_form()
-        else:
-            form = None
-
         if self.can_delete:
             delete_form = self.delete_form()
         else:
@@ -1719,6 +1733,11 @@ class BaseModelView(BaseView, ActionsMixin):
         # Get count and data
         count, data = self.get_list(view_args.page, sort_column, view_args.sort_desc,
                                     view_args.search, view_args.filters)
+
+        list_forms = {}
+        if self.column_editable_list:
+            for row in data:
+                list_forms[self.get_pk_value(row)] = self.list_form(obj=row)
 
         # Calculate number of pages
         if count is not None:
@@ -1756,7 +1775,7 @@ class BaseModelView(BaseView, ActionsMixin):
         return self.render(
             self.list_template,
             data=data,
-            form=form,
+            list_forms=list_forms,
             delete_form=delete_form,
 
             # List
@@ -1924,7 +1943,6 @@ class BaseModelView(BaseView, ActionsMixin):
                            model=model,
                            details_columns=self._details_columns,
                            get_value=self.get_list_value,
-                           get_pk_value=self.get_pk_value,
                            return_url=return_url)
 
     @expose('/delete/', methods=('POST',))
@@ -2024,8 +2042,7 @@ class BaseModelView(BaseView, ActionsMixin):
                         for c in self._export_columns]
                 yield writer.writerow(vals)
 
-        filename = '%s_%s.csv' % (self.name,
-                                  time.strftime("%Y-%m-%d_%H-%M-%S"))
+        filename = self.get_export_name()
 
         disposition = 'attachment;filename=%s' % (secure_filename(filename),)
 
@@ -2058,24 +2075,23 @@ class BaseModelView(BaseView, ActionsMixin):
         if not self.column_editable_list:
             abort(404)
 
-        record = None
         form = self.list_form()
 
         # prevent validation issues due to submitting a single field
-        # delete all fields except the field being submitted
+        # delete all fields except the submitted fields and csrf token
         for field in form:
-            # only the submitted field has a positive last_index
-            if getattr(field, 'last_index', 0):
-                record = self.get_one(str(field.last_index))
-            elif field.name == 'csrf_token':
+            if (field.name in request.form) or (field.name == 'csrf_token'):
                 pass
             else:
                 form.__delitem__(field.name)
 
-        if record is None:
-            return gettext('Failed to update record. %(error)s', error=''), 500
-
         if self.validate_form(form):
+            pk = form.list_form_pk.data
+            record = self.get_one(pk)
+
+            if record is None:
+                return gettext('Record does not exist.'), 500
+
             if self.update_model(form, record):
                 # Success
                 return gettext('Record was successfully saved.')
@@ -2089,6 +2105,8 @@ class BaseModelView(BaseView, ActionsMixin):
                 for error in field.errors:
                     # return validation error to x-editable
                     if isinstance(error, list):
-                        return ", ".join(error), 500
+                        return gettext('Failed to update record. %(error)s',
+                                       error=", ".join(error)), 500
                     else:
-                        return error, 500
+                        return gettext('Failed to update record. %(error)s',
+                                       error=error), 500

@@ -168,7 +168,7 @@
     {% else %}
         {% for f in form if f.widget.input_type != 'hidden' %}
           {% if form_opts %}
-            {% set kwargs = form_opts.widget_args.get(f.name, {}) %}
+            {% set kwargs = form_opts.widget_args.get(f.short_name, {}) %}
           {% else %}
             {% set kwargs = {} %}
           {% endif %}
@@ -233,5 +233,14 @@
   {% if editable_columns %}
   <script src="{{ admin_static.url(filename='vendor/x-editable/js/bootstrap3-editable.min.js', v='1.5.1') }}"></script>
   {% endif %}
-  <script src="{{ admin_static.url(filename='admin/js/form.js', v='1.0.0') }}"></script>
+  <script src="{{ admin_static.url(filename='admin/js/form.js', v='1.0.1') }}"></script>
+{% endmacro %}
+
+{% macro extra() %}
+  {% if admin_view.can_create %}
+  <input name="_add_another" type="submit" class="btn btn-default" value="{{ _gettext('Save and Add Another') }}" />
+  {% endif %}
+  {% if admin_view.can_edit %}
+  <input name="_continue_editing" type="submit" class="btn btn-default" value="{{ _gettext('Save and Continue Editing') }}" />
+  {% endif %}
 {% endmacro %}

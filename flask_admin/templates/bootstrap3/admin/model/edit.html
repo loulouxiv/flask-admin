@@ -1,10 +1,6 @@
 {% extends 'admin/master.html' %}
 {% import 'admin/lib.html' as lib with context %}
-
-{% macro extra() %}
-  <input name="_add_another" type="submit" class="btn btn-default" value="{{ _gettext('Save and Add Another') }}" />
-  <input name="_continue_editing" type="submit" class="btn btn-default" value="{{ _gettext('Save and Continue Editing') }}" />
-{% endmacro %}
+{% from 'admin/lib.html' import extra with context %} {# backward compatible #}
 
 {% block head %}
   {{ super() }}
@@ -27,7 +23,7 @@
     </li>
     {%- if admin_view.can_view_details -%}
     <li>
-        <a href="{{ get_url('.details_view', id=model.id, url=return_url) }}">{{ _gettext('Details') }}</a>
+        <a href="{{ get_url('.details_view', id=request.args.get('id'), url=return_url) }}">{{ _gettext('Details') }}</a>
     </li>
     {%- endif -%}
   </ul>

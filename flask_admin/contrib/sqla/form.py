@@ -12,7 +12,9 @@ from flask_admin._backwards import get_property
 from flask_admin._compat import iteritems
 
 from .validators import Unique
-from .fields import QuerySelectField, QuerySelectMultipleField, InlineModelFormList
+from .fields import (QuerySelectField, QuerySelectMultipleField,
+                     InlineModelFormList, InlineHstoreList, HstoreForm)
+from flask_admin.model.fields import InlineFormField
 from .tools import has_multiple_pks, filter_foreign_columns
 from .ajax import create_ajax_loader
 
@@ -77,12 +79,6 @@ class AdminModelConverter(ModelConverterBase):
 
         if 'query_factory' not in kwargs:
             kwargs['query_factory'] = lambda: self.session.query(remote_model)
-
-        if 'widget' not in kwargs:
-            if multiple:
-                kwargs['widget'] = form.Select2Widget(multiple=True)
-            else:
-                kwargs['widget'] = form.Select2Widget()
 
         if multiple:
             return QuerySelectMultipleField(**kwargs)
@@ -267,10 +263,10 @@ class AdminModelConverter(ModelConverterBase):
 
     @classmethod
     def _string_common(cls, column, field_args, **extra):
-        if column.type.length:
+        if isinstance(column.type.length, int) and column.type.length:
             field_args['validators'].append(validators.Length(max=column.type.length))
 
-    @converts('String', 'Unicode')
+    @converts('String')  # includes VARCHAR, CHAR, and Unicode
     def conv_String(self, column, field_args, **extra):
         if hasattr(column.type, 'enums'):
             accepted_values = list(column.type.enums)
@@ -293,8 +289,7 @@ class AdminModelConverter(ModelConverterBase):
         self._string_common(column=column, field_args=field_args, **extra)
         return fields.StringField(**field_args)
 
-    @converts('Text', 'UnicodeText',
-              'sqlalchemy.types.LargeBinary', 'sqlalchemy.types.Binary')
+    @converts('Text', 'LargeBinary', 'Binary')  # includes UnicodeText
     def conv_Text(self, field_args, **extra):
         self._string_common(field_args=field_args, **extra)
         return fields.TextAreaField(**field_args)
@@ -308,7 +303,7 @@ class AdminModelConverter(ModelConverterBase):
         field_args['widget'] = form.DatePickerWidget()
         return fields.DateField(**field_args)
 
-    @converts('DateTime')
+    @converts('DateTime')  # includes TIMESTAMP
     def convert_datetime(self, field_args, **extra):
         return form.DateTimeField(**field_args)
 
@@ -316,40 +311,32 @@ class AdminModelConverter(ModelConverterBase):
     def convert_time(self, field_args, **extra):
         return form.TimeField(**field_args)
 
-    @converts('Integer', 'SmallInteger')
+    @converts('Integer')  # includes BigInteger and SmallInteger
     def handle_integer_types(self, column, field_args, **extra):
         unsigned = getattr(column.type, 'unsigned', False)
         if unsigned:
             field_args['validators'].append(validators.NumberRange(min=0))
         return fields.IntegerField(**field_args)
 
-    @converts('Numeric', 'Float')
+    @converts('Numeric')  # includes DECIMAL, Float/FLOAT, REAL, and DOUBLE
     def handle_decimal_types(self, column, field_args, **extra):
-        places = getattr(column.type, 'scale', 2)
-        if places is not None:
-            field_args['places'] = places
+        # override default decimal places limit, use database defaults instead
+        field_args.setdefault('places', None)
         return fields.DecimalField(**field_args)
 
-    @converts('databases.mysql.MSYear')
-    def conv_MSYear(self, field_args, **extra):
-        field_args['validators'].append(validators.NumberRange(min=1901, max=2155))
-        return fields.StringField(**field_args)
-
-    @converts('sqlalchemy.dialects.postgresql.base.INET',
-              'databases.postgres.PGInet', 'dialects.postgresql.base.INET')
+    @converts('sqlalchemy.dialects.postgresql.base.INET')
     def conv_PGInet(self, field_args, **extra):
         field_args.setdefault('label', u'IP Address')
         field_args['validators'].append(validators.IPAddress())
         return fields.StringField(**field_args)
 
-    @converts('sqlalchemy.dialects.postgresql.base.MACADDR',
-              'dialects.postgresql.base.MACADDR')
+    @converts('sqlalchemy.dialects.postgresql.base.MACADDR')
     def conv_PGMacaddr(self, field_args, **extra):
         field_args.setdefault('label', u'MAC Address')
         field_args['validators'].append(validators.MacAddress())
         return fields.StringField(**field_args)
 
-    @converts('dialects.postgresql.base.UUID')
+    @converts('sqlalchemy.dialects.postgresql.base.UUID')
     def conv_PGUuid(self, field_args, **extra):
         field_args.setdefault('label', u'UUID')
         field_args['validators'].append(validators.UUID())
@@ -358,6 +345,11 @@ class AdminModelConverter(ModelConverterBase):
     @converts('sqlalchemy.dialects.postgresql.base.ARRAY')
     def conv_ARRAY(self, field_args, **extra):
         return form.Select2TagsField(save_as_list=True, **field_args)
+
+    @converts('HSTORE')
+    def conv_HSTORE(self, field_args, **extra):
+        inner_form = field_args.pop('form', HstoreForm)
+        return InlineHstoreList(InlineFormField(inner_form), **field_args)
 
 
 def _resolve_prop(prop):
@@ -609,6 +601,7 @@ class InlineModelConverter(InlineModelConverterBase):
         if child_form is None:
             child_form = get_form(info.model,
                                   converter,
+                                  base_class=info.form_base_class or form.BaseForm,
                                   only=info.form_columns,
                                   exclude=exclude,
                                   field_args=info.form_args,
