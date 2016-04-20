@@ -362,6 +362,7 @@
                 return true;
             case 'datetimepicker':
                 $el.daterangepicker({
+                  autoApply: true,
                   timePicker: true,
                   showDropdowns: true,
                   singleDatePicker: true,
